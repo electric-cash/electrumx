@@ -3890,7 +3890,7 @@ class Quebecoin(AuxPowMixin, Coin):
     RPC_PORT = 10890
 
 
-class ElectricCash(Coin):
+class ElectricCash(AuxPowMixin, Coin):
     NAME = "ElectricCash"
     SHORTNAME = "ELCASH"
     NET = "mainnet"
