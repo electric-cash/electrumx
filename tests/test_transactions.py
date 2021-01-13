@@ -22,8 +22,7 @@ TRANSACTION_DIR = os.path.join(
 # Those that are not installed will be skipped
 transactions = []
 
-# TODO: uncomment this when tx data is present
-'''
+
 for name in os.listdir(TRANSACTION_DIR):
     try:
         name_parts = name.split("_")
@@ -32,7 +31,6 @@ for name in os.listdir(TRANSACTION_DIR):
             transactions.append((coinFound, json.load(f)))
     except Exception as e:
         transactions.append(pytest.fail(name))
-'''
 
 @pytest.fixture(params=transactions)
 def transaction_details(request):
@@ -54,7 +52,7 @@ def test_transaction(transaction_details):
     vout = tx_info['vout']
     for i in range(len(vout)):
         # value pk_script
-        assert vout[i]['value'] == tx.outputs[i].value
+        assert vout[i]['value'] * 1e8 == tx.outputs[i].value
         spk = vout[i]['scriptPubKey']
         tx_pks = tx.outputs[i].pk_script
         assert spk['hex'] == tx_pks.hex()
