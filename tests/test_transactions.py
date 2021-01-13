@@ -22,6 +22,8 @@ TRANSACTION_DIR = os.path.join(
 # Those that are not installed will be skipped
 transactions = []
 
+# TODO: uncomment this when tx data is present
+'''
 for name in os.listdir(TRANSACTION_DIR):
     try:
         name_parts = name.split("_")
@@ -30,7 +32,7 @@ for name in os.listdir(TRANSACTION_DIR):
             transactions.append((coinFound, json.load(f)))
     except Exception as e:
         transactions.append(pytest.fail(name))
-
+'''
 
 @pytest.fixture(params=transactions)
 def transaction_details(request):
