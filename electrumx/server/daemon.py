@@ -14,6 +14,7 @@ import json
 import time
 from calendar import timegm
 from struct import pack
+import requests
 
 import aiohttp
 from aiorpcx import JSONRPC
@@ -68,6 +69,15 @@ class Daemon(object):
 
     def connector(self):
         return None
+
+    def request_stake(self, params_str):
+        method = "getstakeinfo"
+        data = '{"jsonrpc": "1.0", "id": ' + str(next(self.id_counter)) + ', "method": "' + method + '", "params": ["' + params_str + '"]}'
+
+        response = requests.post(self.current_url(), data=data)
+        if not response.status_code == 200:
+            return None
+        return response.json()['result']
 
     def set_url(self, url):
         '''Set the URLS to the given list, and switch to the first one.'''
@@ -259,8 +269,15 @@ class Daemon(object):
     async def getrawtransaction(self, hex_hash, verbose=False):
         '''Return the serialized raw transaction with the given hash.'''
         # Cast to int because some coin daemons are old and require it
-        return await self._send_single('getrawtransaction',
+        tx = await self._send_single('getrawtransaction',
                                        (hex_hash, int(verbose)))
+        try:
+            if verbose:
+                tx["stakingInfo"] = await self.getstakeinfo(hex_hash)
+        except:
+            pass
+
+        return tx
 
     async def getrawtransactions(self, hex_hashes, replace_errs=True):
         '''Return the serialized raw transactions with the given hashes.
@@ -271,6 +288,16 @@ class Daemon(object):
                                       replace_errs=replace_errs)
         # Convert hex strings to bytes
         return [hex_to_bytes(tx) if tx else None for tx in txs]
+
+    async def getstakinginfo(self):
+        ''' Return information about staking in blockchain
+        '''
+        return await self._send_single('getstakinginfo')
+
+    async def getstakeinfo(self, stake_id_hex):
+        ''' Return information about stake
+        '''
+        return await self._send_single('getstakeinfo', (stake_id_hex, ))
 
     async def broadcast_transaction(self, raw_tx):
         '''Broadcast a transaction to the network.'''
