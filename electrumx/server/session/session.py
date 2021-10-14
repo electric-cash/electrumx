@@ -131,7 +131,17 @@ class ElectrumX(SessionBase):
     async def staking_get_info(self):
         '''The general information about staking and its parameters'''
         self.bump_cost(0.2)
-        return await self.daemon_request('getstakinginfo')
+        info = await self.daemon_request('getstakinginfo')
+
+        info["penalty"] = 0.03
+        info["interestInfo"] = {
+            "4320": 0.05,
+            "12960": 0.06,
+            "25920": 0.075,
+            "51840": 0.1
+        }
+
+        return info
 
     async def stake_get_info(self, hex_hash):
         '''The verbose information about particular stake'''
@@ -148,9 +158,7 @@ class ElectrumX(SessionBase):
     async def scripthash_get_balance(self, scripthash):
         '''Return the confirmed and unconfirmed balance of a scripthash.'''
         hashX = scripthash_to_hashX(scripthash)
-        result = await self.get_balance(hashX)
-        result['stakingInfo'] = await self.staking_get_info()
-        return result
+        return await self.get_balance(hashX)
 
     async def scripthash_get_history(self, scripthash):
         '''Return the confirmed and unconfirmed history of a scripthash.'''
@@ -503,11 +511,12 @@ class ElectrumX(SessionBase):
         return result
 
     async def get_balance(self, hashX):
-        utxos = await self.db.all_utxos(hashX)  # TODO: must include info about staking
-        confirmed = sum(utxo.value for utxo in utxos)
+        utxos = await self.db.all_utxos(hashX)
+        confirmed = sum(utxo.value for utxo in utxos if utxo.is_stake == 0)
+        staked = sum(utxo.value for utxo in utxos if utxo.is_stake == 1)
         unconfirmed = await self.mempool.balance_delta(hashX)
         self.bump_cost(1.0 + len(utxos) / 50)
-        return {'confirmed': confirmed, 'unconfirmed': unconfirmed}
+        return {'confirmed': confirmed, 'unconfirmed': unconfirmed, 'staked': staked}
 
     async def unconfirmed_history(self, hashX):
         # Note unconfirmed history is unordered in electrum-server
