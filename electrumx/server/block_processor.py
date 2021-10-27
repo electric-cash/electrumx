@@ -8,7 +8,6 @@
 
 '''Block prefetcher and chain processor.'''
 
-
 import asyncio
 import time
 
@@ -450,7 +449,7 @@ class BlockProcessor(object):
             for idx, txout in enumerate(tx.outputs):
                 # Ignore unspendable outputs
                 if is_unspendable(txout.pk_script):
-                    staking_idx = validate_stake(txout.pk_script, tx.outputs, self.env)
+                    staking_idx = validate_stake(txout.pk_script, tx.outputs, self.env.coin)
                     continue
 
                 # Get the hashX
