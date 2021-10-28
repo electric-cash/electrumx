@@ -7,7 +7,6 @@
 
 '''Mempool handling.'''
 
-import itertools
 import time
 from abc import ABC, abstractmethod
 from asyncio import Lock
@@ -19,6 +18,7 @@ from aiorpcx import TaskGroup, run_in_thread, sleep
 from electrumx.lib.hash import hash_to_hex_str, hex_str_to_hash
 from electrumx.lib.util import class_logger, chunks
 from electrumx.server.db import UTXO
+from electrumx.lib.staking import validate_stake
 
 
 @attr.s(slots=True)
@@ -185,7 +185,8 @@ class MemPool(object):
                     if not utxo:
                         prev_hash, prev_index = prevout
                         # Raises KeyError if prev_hash is not in txs
-                        utxo = txs[prev_hash].out_pairs[prev_index]
+                        h, v, _ = txs[prev_hash].out_pairs[prev_index]
+                        utxo = (h, v)
                     in_pairs.append(utxo)
             except KeyError:
                 deferred[hash] = tx
@@ -199,10 +200,14 @@ class MemPool(object):
             # Avoid negative fees if dealing with generation-like transactions
             # because some in_parts would be missing
             tx.fee = max(0, (sum(v for _, v in tx.in_pairs) -
-                             sum(v for _, v in tx.out_pairs)))
+                             sum(v for _, v, _ in tx.out_pairs)))
             txs[hash] = tx
 
-            for hashX, _value in itertools.chain(tx.in_pairs, tx.out_pairs):
+            for hashX, value in tx.in_pairs:
+                touched.add(hashX)
+                hashXs[hashX].add(hash)
+
+            for hashX, value, _ in tx.out_pairs:
                 touched.add(hashX)
                 hashXs[hashX].add(hash)
 
@@ -244,8 +249,8 @@ class MemPool(object):
         # First handle txs that have disappeared
         for tx_hash in set(txs).difference(all_hashes):
             tx = txs.pop(tx_hash)
-            tx_hashXs = set(hashX for hashX, value in tx.in_pairs)
-            tx_hashXs.update(hashX for hashX, value in tx.out_pairs)
+            tx_hashXs = set(hashX for hashX, _ in tx.in_pairs)
+            tx_hashXs.update(hashX for hashX, _, _ in tx.out_pairs)
             for hashX in tx_hashXs:
                 hashXs[hashX].remove(tx_hash)
                 if not hashXs[hashX]:
@@ -301,8 +306,17 @@ class MemPool(object):
                 txin_pairs = tuple((txin.prev_hash, txin.prev_idx)
                                    for txin in tx.inputs
                                    if not txin.is_generation())
-                txout_pairs = tuple((to_hashX(txout.pk_script), txout.value)
-                                    for txout in tx.outputs)
+
+                txout_pairs = []
+                staking_idx = -1
+                for idx, txout in enumerate(tx.outputs):
+
+                    staking_idx_temp = validate_stake(txout.pk_script, tx.outputs, self.coin)
+                    if staking_idx_temp != -1:
+                        staking_idx = staking_idx_temp
+
+                    txout_pairs.append( (to_hashX(txout.pk_script), txout.value, staking_idx==idx) )
+
                 txs[hash] = MemPoolTx(txin_pairs, None, txout_pairs,
                                       0, tx_size)
             return txs
@@ -344,7 +358,7 @@ class MemPool(object):
             for hash in self.hashXs[hashX]:
                 tx = self.txs[hash]
                 value -= sum(v for h168, v in tx.in_pairs if h168 == hashX)
-                value += sum(v for h168, v in tx.out_pairs if h168 == hashX)
+                value += sum(v for h168, v, _ in tx.out_pairs if h168 == hashX)
         return value
 
     async def compact_fee_histogram(self):
@@ -383,7 +397,7 @@ class MemPool(object):
         utxos = []
         for tx_hash in self.hashXs.get(hashX, ()):
             tx = self.txs.get(tx_hash)
-            for pos, (hX, value) in enumerate(tx.out_pairs):
+            for pos, (hX, value, is_staking) in enumerate(tx.out_pairs):
                 if hX == hashX:
-                    utxos.append(UTXO(-1, pos, tx_hash, 0, value, 2))
+                    utxos.append( UTXO(-1, pos, tx_hash, 0, value, 1 if is_staking else 0) )
         return utxos
