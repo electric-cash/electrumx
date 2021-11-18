@@ -293,14 +293,14 @@ async def test_balance_delta():
 
     # Check the default dict is handled properly
     prior_len = len(mempool.hashXs)
-    assert await mempool.balance_delta(os.urandom(HASHX_LEN)) == 0
+    assert (await mempool.balance_delta(os.urandom(HASHX_LEN)))[0] == 0
     assert prior_len == len(mempool.hashXs)
 
     # Test all hashXs
     deltas = api.balance_deltas()
     for hashX in api.hashXs:
         expected = deltas.get(hashX, 0)
-        assert await mempool.balance_delta(hashX) == expected
+        assert (await mempool.balance_delta(hashX))[0] == expected
 
 
 @pytest.mark.asyncio
