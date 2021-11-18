@@ -31,7 +31,7 @@ def random_tx(hash160s, utxos):
     # Create inputs spending random UTXOs.  total the inpu
     for n in range(n_inputs):
         prevout = choice(list(utxos))
-        hashX, value = utxos.pop(prevout)
+        hashX, value, s = utxos.pop(prevout)
         inputs.append(TxInput(prevout[0], prevout[1], b'', 4294967295))
         input_value += value
 
@@ -55,7 +55,7 @@ def random_tx(hash160s, utxos):
     tx_hash = tx_hash_fn(tx_bytes)
     for n, output in enumerate(tx.outputs):
         utxos[(tx_hash, n)] = (coin.hashX_from_script(output.pk_script),
-                               output.value)
+                               output.value, 0)
     return tx, tx_hash, tx_bytes
 
 
@@ -84,7 +84,7 @@ class API(MemPoolAPI):
         prevouts = [(os.urandom(32), randrange(0, 10))
                     for n in range (db_utxo_count)]
         random_value = partial(randrange, coin.VALUE_PER_COIN * 10)
-        self.db_utxos = {prevout: (choice(self.hashXs), random_value())
+        self.db_utxos = {prevout: (choice(self.hashXs), random_value(), 0)
                          for prevout in prevouts}
 
         unspent_utxos = self.db_utxos.copy()
@@ -99,7 +99,7 @@ class API(MemPoolAPI):
         for tx_hash, tx in self.txs.items():
             for n, output in enumerate(tx.outputs):
                 hashX = coin.hashX_from_script(output.pk_script)
-                utxos[(tx_hash, n)] = (hashX, output.value)
+                utxos[(tx_hash, n)] = (hashX, output.value, 0)
         return utxos
 
     def mempool_spends(self):
@@ -119,9 +119,9 @@ class API(MemPoolAPI):
                 if prevout in utxos:
                     utxos.pop(prevout)
                 else:
-                    hashX, value = self.db_utxos[prevout]
+                    hashX, value, s = self.db_utxos[prevout]
                     deltas[hashX] -= value
-        for hashX, value in utxos.values():
+        for hashX, value, s in utxos.values():
             deltas[hashX] += value
         return deltas
 
