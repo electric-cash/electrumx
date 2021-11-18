@@ -135,9 +135,9 @@ class API(MemPoolAPI):
                     continue
                 prevout = (input.prev_hash, input.prev_idx)
                 if prevout in utxos:
-                    hashX, value = utxos.pop(prevout)
+                    hashX, value, s = utxos.pop(prevout)
                 else:
-                    hashX, value = self.db_utxos[prevout]
+                    hashX, value, s = self.db_utxos[prevout]
                 spends[hashX].append(prevout)
         return spends
 
@@ -155,9 +155,9 @@ class API(MemPoolAPI):
                 has_ui = has_ui or (input.prev_hash in self.txs)
                 prevout = (input.prev_hash, input.prev_idx)
                 if prevout in utxos:
-                    hashX, value = utxos[prevout]
+                    hashX, value, s = utxos[prevout]
                 else:
-                    hashX, value = self.db_utxos[prevout]
+                    hashX, value, s = self.db_utxos[prevout]
                 hashXs.add(hashX)
                 fee += value
 
@@ -180,9 +180,9 @@ class API(MemPoolAPI):
                     continue
                 prevout = (input.prev_hash, input.prev_idx)
                 if prevout in utxos:
-                    hashX, value = utxos[prevout]
+                    hashX, value, s = utxos[prevout]
                 else:
-                    hashX, value = self.db_utxos[prevout]
+                    hashX, value, s = self.db_utxos[prevout]
                 touched.add(hashX)
 
             for output in tx.outputs:
