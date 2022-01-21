@@ -46,6 +46,7 @@ class ElectrumX(SessionBase):
             'blockchain.headers.subscribe': self.headers_subscribe,
             'blockchain.relayfee': self.relayfee,
             'blockchain.staking.get_info': self.staking_get_info,
+            'blockchain.get_Free_tx_info': self.get_freetxinfo,
             'blockchain.scripthash.get_balance': self.scripthash_get_balance,
             'blockchain.scripthash.get_history': self.scripthash_get_history,
             'blockchain.scripthash.get_mempool': self.scripthash_get_mempool,
@@ -132,7 +133,6 @@ class ElectrumX(SessionBase):
         '''The general information about staking and its parameters'''
         self.bump_cost(0.2)
         info = await self.daemon_request('getstakinginfo')
-
         info["penalty"] = self.env.coin.STAKING_PENALTY
         info["interestInfo"] = self.env.coin.STAKING_INTEREST_INFO
 
@@ -175,6 +175,11 @@ class ElectrumX(SessionBase):
         self.bump_cost(0.1)
         hashX = scripthash_to_hashX(scripthash)
         return self.unsubscribe_hashX(hashX) is not None
+
+    async def get_freetxinfo(self, address):
+        '''Return freetxinfo of a scripthash'''
+        self.bump_cost(0.4)
+        return await self.daemon_request('getfreetxinfo', address)
 
     async def transaction_broadcast(self, raw_tx):
         '''Broadcast a raw transaction to the network.
