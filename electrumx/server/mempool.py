@@ -185,8 +185,8 @@ class MemPool(object):
                     if not utxo:
                         prev_hash, prev_index = prevout
                         # Raises KeyError if prev_hash is not in txs
-                        h, v, s = txs[prev_hash].out_pairs[prev_index]
-                        utxo = (h, v, s)
+                        h, v, _ = txs[prev_hash].out_pairs[prev_index]
+                        utxo = (h, v)
                     in_pairs.append(utxo)
             except KeyError:
                 deferred[hash] = tx
@@ -199,11 +199,11 @@ class MemPool(object):
             tx.in_pairs = tuple(in_pairs)
             # Avoid negative fees if dealing with generation-like transactions
             # because some in_parts would be missing
-            tx.fee = max(0, (sum(v for _, v, _ in tx.in_pairs) -
+            tx.fee = max(0, (sum(v for _, v in tx.in_pairs) -
                              sum(v for _, v, _ in tx.out_pairs)))
             txs[hash] = tx
 
-            for hashX, value, _ in tx.in_pairs:
+            for hashX, value in tx.in_pairs:
                 touched.add(hashX)
                 hashXs[hashX].add(hash)
 
@@ -249,7 +249,7 @@ class MemPool(object):
         # First handle txs that have disappeared
         for tx_hash in set(txs).difference(all_hashes):
             tx = txs.pop(tx_hash)
-            tx_hashXs = set(hashX for hashX, _, _ in tx.in_pairs)
+            tx_hashXs = set(hashX for hashX, _ in tx.in_pairs)
             tx_hashXs.update(hashX for hashX, _, _ in tx.out_pairs)
             for hashX in tx_hashXs:
                 hashXs[hashX].remove(tx_hash)
@@ -290,7 +290,7 @@ class MemPool(object):
         hex_hashes_iter = (hash_to_hex_str(hash) for hash in hashes)
         raw_txs = await self.api.raw_transactions(hex_hashes_iter)
 
-        def deserialize_txs():  # This function is pure
+        def deserialize_txs():    # This function is pure
             to_hashX = self.coin.hashX_from_script
             deserializer = self.coin.DESERIALIZER
 
@@ -308,9 +308,14 @@ class MemPool(object):
                                    if not txin.is_generation())
 
                 txout_pairs = []
-                staking_idx = validate_stake(tx.outputs[0].pk_script, tx.outputs, self.coin)
+                staking_idx = -1
                 for idx, txout in enumerate(tx.outputs):
-                    txout_pairs.append((to_hashX(txout.pk_script), txout.value, staking_idx == idx))
+
+                    staking_idx_temp = validate_stake(txout.pk_script, tx.outputs, self.coin)
+                    if staking_idx_temp != -1:
+                        staking_idx = staking_idx_temp
+
+                    txout_pairs.append( (to_hashX(txout.pk_script), txout.value, staking_idx==idx) )
 
                 txs[hash] = MemPoolTx(txin_pairs, None, txout_pairs,
                                       0, tx_size)
@@ -348,16 +353,13 @@ class MemPool(object):
 
         Can be positive or negative.
         '''
-        unconfirmed = 0
-        staked = 0
+        value = 0
         if hashX in self.hashXs:
             for hash in self.hashXs[hashX]:
                 tx = self.txs[hash]
-                unconfirmed -= sum(v for h168, v, is_stake in tx.in_pairs if h168 == hashX and not is_stake)
-                unconfirmed += sum(v for h168, v, is_stake in tx.out_pairs if h168 == hashX and not is_stake)
-                staked -= sum(v for h168, v, is_stake in tx.in_pairs if h168 == hashX and is_stake)
-                staked += sum(v for h168, v, is_stake in tx.out_pairs if h168 == hashX and is_stake)
-        return unconfirmed, staked
+                value -= sum(v for h168, v in tx.in_pairs if h168 == hashX)
+                value += sum(v for h168, v, _ in tx.out_pairs if h168 == hashX)
+        return value
 
     async def compact_fee_histogram(self):
         '''Return a compact fee histogram of the current mempool.'''
@@ -397,5 +399,5 @@ class MemPool(object):
             tx = self.txs.get(tx_hash)
             for pos, (hX, value, is_staking) in enumerate(tx.out_pairs):
                 if hX == hashX:
-                    utxos.append(UTXO(-1, pos, tx_hash, 0, value, 1 if is_staking else 0))
+                    utxos.append( UTXO(-1, pos, tx_hash, 0, value, 1 if is_staking else 0) )
         return utxos
