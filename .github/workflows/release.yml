@@ -23,7 +23,7 @@ jobs:
 
       - name: Set environment variables for dev branch
         run: |
-          if [[ $GITHUB_REF == 'refs/heads/development' ] || [ $GITHUB_REF == 'refs/heads/fix/*' ] ]; then
+          if [ $GITHUB_REF == 'refs/heads/development' ] || [ $GITHUB_REF == 'refs/heads/fix/*' ]; then
             echo "IMAGE_TAG=dev-$IMAGE_TAG" >> "$GITHUB_ENV"
           fi
 
