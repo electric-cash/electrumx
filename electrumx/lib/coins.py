@@ -544,12 +544,21 @@ class ElectricCash(AuxPowElCashMixin, Coin):
     TX_PER_BLOCK = 8000
     RPC_PORT = 8332
 
+    STAKING_MIN_AMOUNT = 5
     STAKING_PENALTY = 0.03
     STAKING_INTEREST_INFO = {
         "4320": 0.05,
         "12960": 0.06,
         "25920": 0.075,
         "51840": 0.1
+    }
+
+    FREE_TX_BASE_LIMIT = 500
+    FREE_TX_LIMIT_COEFFICIENT = {
+        20,
+        25,
+        35,
+        50
     }
 
 
