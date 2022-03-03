@@ -8,6 +8,7 @@
 '''Classes for local RPC server and remote client TCP/SSL servers.'''
 
 import codecs
+import math
 
 from aiorpcx import (
      RPCError, ReplyAndDisconnect
@@ -47,6 +48,7 @@ class ElectrumX(SessionBase):
             'blockchain.relayfee': self.relayfee,
             'blockchain.staking.get_info': self.staking_get_info,
             'blockchain.get_Free_tx_info': self.get_freetxinfo,
+            'blockchain.staking.calc_free_tx_limit': self.stake_free_tx_limit,
             'blockchain.scripthash.get_balance': self.scripthash_get_balance,
             'blockchain.scripthash.get_history': self.scripthash_get_history,
             'blockchain.scripthash.get_mempool': self.scripthash_get_mempool,
@@ -142,6 +144,14 @@ class ElectrumX(SessionBase):
         '''The verbose information about particular stake'''
         self.bump_cost(0.5)
         return await self.daemon_request('getstakeinfo', hex_hash)
+
+    async def stake_free_tx_limit(self, index, amount):
+        '''Calculate free tx limit for given stake params'''
+        self.bump_cost(0.2)
+        limit = math.floor(
+            (amount / self.env.coin.STAKING_MIN_AMOUNT - 1.0) * self.env.coin.FREE_TX_LIMIT_COEFFICIENT[
+                index] + self.env.coin.FREE_TX_BASE_LIMIT)
+        return limit
 
     async def scripthash_subscribe(self, scripthash):
         '''Subscribe to a script hash.
