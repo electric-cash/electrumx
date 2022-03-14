@@ -47,7 +47,7 @@ class ElectrumX(SessionBase):
             'blockchain.headers.subscribe': self.headers_subscribe,
             'blockchain.relayfee': self.relayfee,
             'blockchain.staking.get_info': self.staking_get_info,
-            'blockchain.get_Free_tx_info': self.get_freetxinfo,
+            'blockchain.get_free_tx_info': self.get_freetxinfo,
             'blockchain.staking.calc_free_tx_limit': self.stake_free_tx_limit,
             'blockchain.scripthash.get_balance': self.scripthash_get_balance,
             'blockchain.scripthash.get_history': self.scripthash_get_history,
@@ -149,8 +149,8 @@ class ElectrumX(SessionBase):
         '''Calculate free tx limit for given stake params'''
         self.bump_cost(0.2)
         limit = math.floor(
-            (amount / self.env.coin.STAKING_MIN_AMOUNT - 1.0) * self.env.coin.FREE_TX_LIMIT_COEFFICIENT[
-                index] + self.env.coin.FREE_TX_BASE_LIMIT)
+            (float(amount) / self.env.coin.STAKING_MIN_AMOUNT - 1.0) * self.env.coin.FREE_TX_LIMIT_COEFFICIENT[
+                int(index)] + self.env.coin.FREE_TX_BASE_LIMIT)
         return limit
 
     async def scripthash_subscribe(self, scripthash):
