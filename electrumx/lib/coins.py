@@ -554,12 +554,12 @@ class ElectricCash(AuxPowElCashMixin, Coin):
     }
 
     FREE_TX_BASE_LIMIT = 500
-    FREE_TX_LIMIT_COEFFICIENT = {
+    FREE_TX_LIMIT_COEFFICIENT = [
         20,
         25,
         35,
         50
-    }
+    ]
 
 
 class ElectricCashTestnet(ElectricCash):
