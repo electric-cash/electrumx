@@ -5,6 +5,7 @@ on:
     branches:
       - master
       - development
+      - fix/*
 
 env:
   ECR_REPOSITORY: electrumx
@@ -25,6 +26,8 @@ jobs:
         run: |
           if [[ $GITHUB_REF == 'refs/heads/development' ]]; then
             echo "IMAGE_TAG=dev-$IMAGE_TAG" >> "$GITHUB_ENV"
+          elif [[ $GITHUB_REF == 'refs/heads/fix/'* ]]; then
+            echo "IMAGE_TAG=fix-$IMAGE_TAG" >> "$GITHUB_ENV"
           fi
 
       - name: Configure AWS credentials

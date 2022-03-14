@@ -780,7 +780,8 @@ class DB(object):
                     return None
 
                 value, = unpack_le_uint64(db_value[:-2])
-                return hashX, value
+                is_stake, = unpack_le_uint32(db_value[-2:]+b'\x00\x00')
+                return hashX, value, is_stake
             return [lookup_utxo(*hashX_pair) for hashX_pair in hashX_pairs]
 
         hashX_pairs = await run_in_thread(lookup_hashXs)
