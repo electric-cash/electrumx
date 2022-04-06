@@ -290,9 +290,14 @@ class Daemon(object):
         return await self._send_single('getstakeinfo', (stake_id_hex, ))
 
     async def getfreetxinfo(self, address):
-        ''' Return information about stake
+        ''' Return information about free tx limits
         '''
         return await self._send_single('getfreetxinfo', (address, ))
+
+    async def getgovpower(self, address):
+        ''' Return information about governance power
+        '''
+        return await self._send_single('getgovpower', (address, ))
 
     async def broadcast_transaction(self, raw_tx):
         '''Broadcast a transaction to the network.'''

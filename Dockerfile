@@ -10,14 +10,12 @@ RUN apk add --no-cache \
         libffi-dev \
         gcc && \
     apk add --no-cache --repository http://dl-cdn.alpinelinux.org/alpine/v3.11/main leveldb-dev && \
-    apk add --no-cache --repository http://dl-cdn.alpinelinux.org/alpine/edge/testing rocksdb-dev && \
     pip install \
         aiohttp \
         pylru \
         plyvel \
         websockets \
         leveldb \
-        python-rocksdb \
         pytest-asyncio \
         pytest-cov \
         pycodestyle \
