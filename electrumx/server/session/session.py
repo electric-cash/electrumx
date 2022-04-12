@@ -50,6 +50,8 @@ class ElectrumX(SessionBase):
             'blockchain.get_free_tx_info': self.get_freetxinfo,
             'blockchain.get_gov_power': self.get_govpower,
             'blockchain.staking.calc_free_tx_limit': self.stake_free_tx_limit,
+            'blockchain.staking.calc_gp': self.stake_gp_reward,
+            'blockchain.staking.calc_gp_and_free_tx_limit': self.stake_gp_and_free_tx_limit,
             'blockchain.scripthash.get_balance': self.scripthash_get_balance,
             'blockchain.scripthash.get_history': self.scripthash_get_history,
             'blockchain.scripthash.get_mempool': self.scripthash_get_mempool,
@@ -153,6 +155,20 @@ class ElectrumX(SessionBase):
             (float(amount) / self.env.coin.STAKING_MIN_AMOUNT - 1.0) * self.env.coin.FREE_TX_LIMIT_COEFFICIENT[
                 int(index)] + self.env.coin.FREE_TX_BASE_LIMIT)
         return limit
+
+    async def stake_gp_reward(self, index, amount):
+        '''Calculate free tx limit for given stake params'''
+        self.bump_cost(0.2)
+        period, percentage = self.env.coin.STAKING_INTEREST_INFO.items()[int(index)]
+        gp = math.floor(float(amount) * percentage * float(period) / 51840 * self.env.coin.GP_COEFFICIENT)
+        return gp
+
+    async def stake_gp_and_free_tx_limit(self, index, amount):
+        '''Calculate gp and free tx limit for given stake params'''
+        return {
+            'gp': await self.stake_gp_reward(index, amount),
+            'free_tx_imit': await self.stake_free_tx_limit(index, amount)
+        }
 
     async def scripthash_subscribe(self, scripthash):
         '''Subscribe to a script hash.

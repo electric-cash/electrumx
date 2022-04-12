@@ -561,6 +561,8 @@ class ElectricCash(AuxPowElCashMixin, Coin):
         50
     ]
 
+    GP_COEFFICIENT = 48
+
 
 class ElectricCashTestnet(ElectricCash):
     SHORTNAME = "ELCASHT"
