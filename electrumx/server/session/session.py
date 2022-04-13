@@ -140,7 +140,6 @@ class ElectrumX(SessionBase):
         info = await self.daemon_request('getstakinginfo')
         info["penalty"] = self.env.coin.STAKING_PENALTY
         info["interestInfo"] = self.env.coin.STAKING_INTEREST_INFO
-
         return info
 
     async def stake_get_info(self, hex_hash):
@@ -159,8 +158,7 @@ class ElectrumX(SessionBase):
     async def stake_gp_reward(self, index, amount):
         '''Calculate free tx limit for given stake params'''
         self.bump_cost(0.2)
-        period, percentage = self.env.coin.STAKING_INTEREST_INFO.items()[int(index)]
-        gp = math.floor(float(amount) * percentage * float(period) / 51840 * self.env.coin.GP_COEFFICIENT)
+        gp = math.floor(float(amount) * self.env.coin.STAKING_INTERESTS[int(index)] * self.env.coin.STAKING_PERIODS[int(index)] / 51840 * self.env.coin.GP_COEFFICIENT)
         return gp
 
     async def stake_gp_and_free_tx_limit(self, index, amount):

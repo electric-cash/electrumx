@@ -47,7 +47,6 @@ import electrumx.server.daemon as daemon
 from electrumx.server.session.session import ElectrumX
 from electrumx.server.session.session_extended import AuxPoWElectrumX, AuxPoWElectrumXElCash
 
-
 Block = namedtuple("Block", "raw header transactions")
 
 
@@ -306,7 +305,6 @@ class EquihashMixin(object):
 
 
 class ScryptMixin(object):
-
     DESERIALIZER = lib_tx.DeserializerTxTime
     HEADER_HASH = None
 
@@ -546,12 +544,22 @@ class ElectricCash(AuxPowElCashMixin, Coin):
 
     STAKING_MIN_AMOUNT = 5
     STAKING_PENALTY = 0.03
-    STAKING_INTEREST_INFO = {
-        "4320": 0.05,
-        "12960": 0.06,
-        "25920": 0.075,
-        "51840": 0.1
-    }
+
+    STAKING_PERIODS = [
+        4320,
+        12960,
+        25920,
+        51840,
+    ]
+
+    STAKING_INTERESTS = [
+        0.05,
+        0.06,
+        0.075,
+        0.1,
+    ]
+
+    STAKING_INTEREST_INFO = dict(zip(STAKING_PERIODS, STAKING_INTERESTS))
 
     FREE_TX_BASE_LIMIT = 500
     FREE_TX_LIMIT_COEFFICIENT = [
@@ -575,12 +583,22 @@ class ElectricCashTestnet(ElectricCash):
     P2SH_VERBYTE = [bytes.fromhex("5C")]  # e
     WIF_BYTE = bytes.fromhex("EF")
 
-    STAKING_INTEREST_INFO = {
-        "12": 50.0,
-        "36": 60.0,
-        "72": 75.0,
-        "144": 100.0
-    }
+    STAKING_PERIODS = [
+        12,
+        36,
+        72,
+        144,
+    ]
+
+    STAKING_INTERESTS = [
+        50,
+        60,
+        75,
+        100,
+    ]
+
+    STAKING_INTEREST_INFO = dict(zip(STAKING_PERIODS, STAKING_INTERESTS))
+
 
 class ElectricCashRegTest(ElectricCashTestnet):
     SHORTNAME = "ELCASHRT"
