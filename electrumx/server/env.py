@@ -84,6 +84,8 @@ class Env(EnvBase):
         self.request_sleep = self.integer('REQUEST_SLEEP', 2500)
         self.request_timeout = self.integer('REQUEST_TIMEOUT', 30)
         self.session_timeout = self.integer('SESSION_TIMEOUT', 600)
+        self.cache_limiter = self.integer('CACHE_LIMITER', 1)
+        self.fetching_pause_time = self.integer('FETCHING_PAUSE_TIME', 0)
 
         # Services last - uses some env vars above
 

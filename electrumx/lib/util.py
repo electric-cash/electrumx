@@ -318,9 +318,11 @@ unpack_le_uint64_from = struct_le_Q.unpack_from
 unpack_be_uint16_from = struct_be_H.unpack_from
 unpack_be_uint32_from = struct_be_I.unpack_from
 
+unpack_le_uint16 = struct_le_H.unpack
 unpack_le_uint32 = struct_le_I.unpack
 unpack_le_uint64 = struct_le_Q.unpack
 unpack_be_uint32 = struct_be_I.unpack
+unpack_byte = structB.unpack
 
 pack_le_int32 = struct_le_i.pack
 pack_le_int64 = struct_le_q.pack
@@ -333,6 +335,18 @@ pack_byte = structB.pack
 
 hex_to_bytes = bytes.fromhex
 
+def unpack_varint(varint_bytes):
+        n, = unpack_byte(varint_bytes[0:1])
+        if n < 253:
+            return n
+        elif n == 253:
+            result, = unpack_le_uint16(varint_bytes)
+        elif n == 254:
+            result, = unpack_le_uint32(varint_bytes)
+        else:
+            result, = unpack_le_uint64(varint_bytes)
+
+        return result
 
 def pack_varint(n):
     if n < 253:

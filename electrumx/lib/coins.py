@@ -35,21 +35,17 @@ import re
 import struct
 from decimal import Decimal
 from hashlib import sha256
-from functools import partial
 
 import electrumx.lib.util as util
 from electrumx.lib.hash import Base58, hash160, double_sha256, hash_to_hex_str
-from electrumx.lib.hash import HASHX_LEN, hex_str_to_hash
+from electrumx.lib.hash import HASHX_LEN
 from electrumx.lib.script import (_match_ops, Script, ScriptError,
                                   ScriptPubKey, OpCodes)
 import electrumx.lib.tx as lib_tx
-import electrumx.lib.tx_dash as lib_tx_dash
-import electrumx.lib.tx_axe as lib_tx_axe
 import electrumx.server.block_processor as block_proc
 import electrumx.server.daemon as daemon
-from electrumx.server.session import (ElectrumX, DashElectrumX,
-                                      SmartCashElectrumX, AuxPoWElectrumX, AuxPoWElectrumXElCash)
-
+from electrumx.server.session.session import ElectrumX
+from electrumx.server.session.session_extended import AuxPoWElectrumX, AuxPoWElectrumXElCash
 
 Block = namedtuple("Block", "raw header transactions")
 
@@ -309,7 +305,6 @@ class EquihashMixin(object):
 
 
 class ScryptMixin(object):
-
     DESERIALIZER = lib_tx.DeserializerTxTime
     HEADER_HASH = None
 
@@ -547,6 +542,35 @@ class ElectricCash(AuxPowElCashMixin, Coin):
     TX_PER_BLOCK = 8000
     RPC_PORT = 8332
 
+    STAKING_MIN_AMOUNT = 5
+    STAKING_PENALTY = 0.03
+
+    STAKING_PERIODS = [
+        4320,
+        12960,
+        25920,
+        51840,
+    ]
+
+    STAKING_INTERESTS = [
+        0.05,
+        0.06,
+        0.075,
+        0.1,
+    ]
+
+    STAKING_INTEREST_INFO = dict(zip(STAKING_PERIODS, STAKING_INTERESTS))
+
+    FREE_TX_BASE_LIMIT = 500
+    FREE_TX_LIMIT_COEFFICIENT = [
+        20,
+        25,
+        35,
+        50
+    ]
+
+    GP_COEFFICIENT = 48
+
 
 class ElectricCashTestnet(ElectricCash):
     SHORTNAME = "ELCASHT"
@@ -558,6 +582,22 @@ class ElectricCashTestnet(ElectricCash):
     P2PKH_VERBYTE = bytes.fromhex("41")  # T
     P2SH_VERBYTE = [bytes.fromhex("5C")]  # e
     WIF_BYTE = bytes.fromhex("EF")
+
+    STAKING_PERIODS = [
+        12,
+        36,
+        72,
+        144,
+    ]
+
+    STAKING_INTERESTS = [
+        50,
+        60,
+        75,
+        100,
+    ]
+
+    STAKING_INTEREST_INFO = dict(zip(STAKING_PERIODS, STAKING_INTERESTS))
 
 
 class ElectricCashRegTest(ElectricCashTestnet):

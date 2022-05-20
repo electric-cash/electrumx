@@ -29,14 +29,15 @@
 
 from collections import namedtuple
 from hashlib import blake2s
+import logging
 
 from electrumx.lib.hash import sha256, double_sha256, hash_to_hex_str
 from electrumx.lib.script import OpCodes
 from electrumx.lib.util import (
     unpack_le_int32_from, unpack_le_int64_from, unpack_le_uint16_from,
-    unpack_be_uint16_from,
-    unpack_le_uint32_from, unpack_le_uint64_from, pack_le_int32, pack_varint,
-    pack_le_uint32, pack_le_int64, pack_varbytes,
+    unpack_be_uint16_from, unpack_le_uint32_from, unpack_le_uint64_from,
+    pack_le_int32, pack_le_uint32, pack_le_int64, pack_varint, pack_varbytes,
+    unpack_le_uint16, unpack_le_uint32, unpack_le_uint64
 )
 
 ZERO = bytes(32)
@@ -81,6 +82,7 @@ class TxInput(namedtuple("TxInput", "prev_hash prev_idx script sequence")):
 class TxOutput(namedtuple("TxOutput", "value pk_script")):
 
     def serialize(self):
+        # TODO: Add info about staking
         return b''.join((
             pack_le_int64(self.value),
             pack_varbytes(self.pk_script),

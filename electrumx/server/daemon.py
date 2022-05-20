@@ -259,8 +259,15 @@ class Daemon(object):
     async def getrawtransaction(self, hex_hash, verbose=False):
         '''Return the serialized raw transaction with the given hash.'''
         # Cast to int because some coin daemons are old and require it
-        return await self._send_single('getrawtransaction',
+        tx = await self._send_single('getrawtransaction',
                                        (hex_hash, int(verbose)))
+        try:
+            if verbose:
+                tx["stakingInfo"] = await self.getstakeinfo(hex_hash)
+        except:
+            pass
+
+        return tx
 
     async def getrawtransactions(self, hex_hashes, replace_errs=True):
         '''Return the serialized raw transactions with the given hashes.
@@ -271,6 +278,26 @@ class Daemon(object):
                                       replace_errs=replace_errs)
         # Convert hex strings to bytes
         return [hex_to_bytes(tx) if tx else None for tx in txs]
+
+    async def getstakinginfo(self):
+        ''' Return information about staking in blockchain
+        '''
+        return await self._send_single('getstakinginfo')
+
+    async def getstakeinfo(self, stake_id_hex):
+        ''' Return information about stake
+        '''
+        return await self._send_single('getstakeinfo', (stake_id_hex, ))
+
+    async def getfreetxinfo(self, address):
+        ''' Return information about free tx limits
+        '''
+        return await self._send_single('getfreetxinfo', (address, ))
+
+    async def getgovpower(self, address):
+        ''' Return information about governance power
+        '''
+        return await self._send_single('getgovpower', (address, ))
 
     async def broadcast_transaction(self, raw_tx):
         '''Broadcast a transaction to the network.'''
