@@ -28,10 +28,12 @@ from electrumx.lib.staking import validate_stake
 class Prefetcher(object):
     '''Prefetches blocks (in the forward direction only).'''
 
-    def __init__(self, daemon, coin, blocks_event):
+    def __init__(self, daemon, env, blocks_event):
         self.logger = class_logger(__name__, self.__class__.__name__)
         self.daemon = daemon
-        self.coin = coin
+        self.coin = env.coin
+        self.cache_limiter = env.cache_limiter
+        self.fetching_pause_time = env.fetching_pause_time
         self.blocks_event = blocks_event
         self.blocks = []
         self.caught_up = False
@@ -42,7 +44,7 @@ class Prefetcher(object):
         # The prefetched block cache size.  The min cache size has
         # little effect on sync time.
         self.cache_size = 0
-        self.min_cache_size = 10 * 1024 * 1024
+        self.min_cache_size = 10 * 1024 * 1024 // self.cache_limiter
         # This makes the first fetch be 10 blocks
         self.ave_size = self.min_cache_size // 10
         self.polling_delay = 5
@@ -139,6 +141,7 @@ class Prefetcher(object):
                 self.cache_size += size
                 self.fetched_height += count
                 self.blocks_event.set()
+                await asyncio.sleep(self.fetching_pause_time)
 
         self.refill_event.clear()
         return True
@@ -163,7 +166,7 @@ class BlockProcessor(object):
 
         self.coin = env.coin
         self.blocks_event = asyncio.Event()
-        self.prefetcher = Prefetcher(daemon, env.coin, self.blocks_event)
+        self.prefetcher = Prefetcher(daemon, env, self.blocks_event)
         self.logger = class_logger(__name__, self.__class__.__name__)
 
         # Meta
