@@ -356,7 +356,8 @@ class SessionManager:
 
         real_name: "bch.electrumx.cash t50001 s50002" for example
         '''
-        await self.peer_mgr.add_localRPC_peer(real_name)
+        if not await self.peer_mgr.add_localRPC_peer(real_name):
+            return "peer '{}' not added: peer discovery is stopping".format(real_name)
         return "peer '{}' added".format(real_name)
 
     async def rpc_disconnect(self, session_ids):
@@ -558,7 +559,8 @@ class SessionManager:
             await self._start_external_servers()
             # Peer discovery should start after the external servers
             # because we connect to ourself
-            async with task_group(self._task_group) as group:
+            async with task_group(self._task_group,
+                                  on_closing=self.peer_mgr.close_monitor_admission) as group:
                 await group.spawn(self.peer_mgr.discover_peers())
                 await group.spawn(self._clear_stale_sessions())
                 await group.spawn(self._handle_chain_reorgs())
@@ -566,7 +568,10 @@ class SessionManager:
                 await group.spawn(self._log_sessions())
                 await group.spawn(self._manage_servers())
         finally:
-            await self._drain_on_shutdown()
+            try:
+                await self.peer_mgr.shutdown()
+            finally:
+                await self._drain_on_shutdown()
 
     async def _drain_on_shutdown(self):
         async with asyncio.TaskGroup() as closers:
