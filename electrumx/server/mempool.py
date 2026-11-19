@@ -17,6 +17,7 @@ import attr
 from aiorpcx import TaskGroup, run_in_thread, sleep
 
 from electrumx.lib.hash import hash_to_hex_str, hex_str_to_hash
+from electrumx.lib.taskgroup import task_group
 from electrumx.lib.util import class_logger, chunks
 from electrumx.server.db import UTXO
 
@@ -255,19 +256,17 @@ class MemPool(object):
         # Process new transactions
         new_hashes = list(all_hashes.difference(txs))
         if new_hashes:
-            group = TaskGroup()
-            for hashes in chunks(new_hashes, 200):
-                coro = self._fetch_and_accept(hashes, all_hashes, touched)
-                await group.spawn(coro)
-            if mempool_height != self.api.db_height():
-                raise DBSyncError
-
             tx_map = {}
             utxo_map = {}
-            async for task in group:
-                deferred, unspent = task.result()
-                tx_map.update(deferred)
-                utxo_map.update(unspent)
+            async with TaskGroup() as group:
+                for hashes in chunks(new_hashes, 200):
+                    await group.spawn(self._fetch_and_accept, hashes, all_hashes, touched)
+                if mempool_height != self.api.db_height():
+                    raise DBSyncError
+                async for task in group:
+                    deferred, unspent = task.result()
+                    tx_map.update(deferred)
+                    utxo_map.update(unspent)
 
             prior_count = 0
             # FIXME: this is not particularly efficient
@@ -329,7 +328,7 @@ class MemPool(object):
 
     async def keep_synchronized(self, synchronized_event):
         '''Keep the mempool synchronized with the daemon.'''
-        async with TaskGroup() as group:
+        async with task_group() as group:
             await group.spawn(self._refresh_hashes(synchronized_event))
             await group.spawn(self._refresh_histogram(synchronized_event))
             await group.spawn(self._logging(synchronized_event))

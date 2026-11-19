@@ -22,6 +22,7 @@ from aiorpcx import (connect_rs, RPCSession, SOCKSProxy, Notification, handler_i
                      sleep, ignore_after)
 
 from electrumx.lib.peer import Peer
+from electrumx.lib.taskgroup import task_group
 from electrumx.lib.util import class_logger
 
 PEER_GOOD, PEER_STALE, PEER_NEVER, PEER_BAD = range(4)
@@ -366,7 +367,7 @@ class PeerManager:
         peer.server_version = server_version
         peer.features['server_version'] = server_version
 
-        async with TaskGroup() as g:
+        async with task_group() as g:
             await g.spawn(self._send_headers_subscribe(session))
             await g.spawn(self._send_server_features(session, peer))
             peers_task = await g.spawn(self._send_peers_subscribe
@@ -453,7 +454,7 @@ class PeerManager:
         self.logger.info(f'my clearnet self: {self._my_clearnet_peer()}')
         self.logger.info(f'force use of proxy: {self.env.force_proxy}')
         self.logger.info(f'beginning peer discovery...')
-        async with self.group as group:
+        async with task_group(self.group) as group:
             await group.spawn(self._refresh_blacklist())
             await group.spawn(self._detect_proxy())
             await group.spawn(self._import_peers())
@@ -506,7 +507,7 @@ class PeerManager:
             permit = self._permit_new_onion_peer(now)
             reason = 'rate limiting'
         else:
-            getaddrinfo = asyncio.get_event_loop().getaddrinfo
+            getaddrinfo = asyncio.get_running_loop().getaddrinfo
             try:
                 infos = await getaddrinfo(host, 80, type=socket.SOCK_STREAM)
             except socket.gaierror:

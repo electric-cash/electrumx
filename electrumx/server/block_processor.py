@@ -12,9 +12,10 @@
 import asyncio
 import time
 
-from aiorpcx import TaskGroup, run_in_thread, CancelledError
+from aiorpcx import run_in_thread
 
 import electrumx
+from electrumx.lib.taskgroup import task_group
 from electrumx.server.daemon import DaemonError
 from electrumx.lib.hash import hash_to_hex_str, HASHX_LEN
 from electrumx.lib.script import is_unspendable_legacy, is_unspendable_genesis
@@ -191,15 +192,20 @@ class BlockProcessor(object):
         self.backed_up_event = asyncio.Event()
 
     async def run_in_thread_with_lock(self, func, *args):
-        # Run in a thread to prevent blocking.  Shielded so that
-        # cancellations from shutdown don't lose work - when the task
-        # completes the data will be flushed and then we shut down.
-        # Take the state lock to be certain in-memory state is
-        # consistent and not being updated elsewhere.
-        async def run_in_thread_locked():
-            async with self.state_lock:
-                return await run_in_thread(func, *args)
-        return await asyncio.shield(run_in_thread_locked())
+        async with self.state_lock:
+            # Cancelling the waiter cannot stop an executor thread. Hold the
+            # lock and observe its result before deciding whether it is safe to flush.
+            writer = asyncio.create_task(run_in_thread(func, *args))
+            cancelled = None
+            while not writer.done():
+                try:
+                    await asyncio.shield(writer)
+                except asyncio.CancelledError as exc:
+                    cancelled = exc
+            result = writer.result()
+            if cancelled is not None:
+                raise cancelled
+            return result
 
     async def check_and_advance_blocks(self, raw_blocks):
         '''Process the list of raw blocks passed.  Detects and handles
@@ -258,7 +264,8 @@ class BlockProcessor(object):
             except FileNotFoundError:
                 return await self.daemon.raw_blocks(hex_hashes)
 
-        def flush_backup():
+        def backup_and_flush(raw_blocks):
+            self.backup_blocks(raw_blocks)
             # self.touched can include other addresses which is
             # harmless, but remove None.
             self.touched.discard(None)
@@ -269,8 +276,7 @@ class BlockProcessor(object):
         hashes = [hash_to_hex_str(hash) for hash in reversed(hashes)]
         for hex_hashes in chunks(hashes, 50):
             raw_blocks = await get_raw_blocks(last, hex_hashes)
-            await self.run_in_thread_with_lock(self.backup_blocks, raw_blocks)
-            await self.run_in_thread_with_lock(flush_backup)
+            await self.run_in_thread_with_lock(backup_and_flush, raw_blocks)
             last -= len(raw_blocks)
         await self.prefetcher.reset_height(self.height)
         self.backed_up_event.set()
@@ -677,13 +683,16 @@ class BlockProcessor(object):
         self._caught_up_event = caught_up_event
         await self._first_open_dbs()
         try:
-            async with TaskGroup() as group:
+            async with task_group() as group:
                 await group.spawn(self.prefetcher.main_loop(self.height))
                 await group.spawn(self._process_prefetched_blocks())
         # Don't flush for arbitrary exceptions as they might be a cause or consequence of
         # corrupted data
-        except CancelledError:
+        except asyncio.CancelledError:
             self.logger.info('flushing to DB for a clean shutdown...')
+            await self.flush(True)
+            raise
+        else:
             await self.flush(True)
 
     def force_chain_reorg(self, count):
