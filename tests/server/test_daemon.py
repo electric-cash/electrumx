@@ -30,7 +30,7 @@ def daemon(request):
 class ResponseBase(object):
 
     def __init__(self, headers, status):
-        self.headers = headers
+        self.content_type = headers['Content-Type'].partition(';')[0]
         self.status = status
 
     async def __aenter__(self):

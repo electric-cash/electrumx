@@ -3,6 +3,7 @@
 import os
 import random
 import re
+from unittest.mock import patch
 
 import pytest
 
@@ -19,6 +20,12 @@ base_environ = {
     'DAEMON_URL': BASE_DAEMON_URL,
     'COIN': 'ElectricCash',
 }
+
+
+@pytest.fixture(autouse=True)
+def isolated_env():
+    with patch.dict(os.environ, base_environ, clear=True):
+        yield
 
 
 def setup_base_env():
