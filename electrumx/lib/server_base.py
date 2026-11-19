@@ -17,8 +17,6 @@ import time
 from contextlib import suppress
 from functools import partial
 
-from aiorpcx import spawn
-
 from electrumx.lib.util import class_logger
 
 
@@ -29,13 +27,13 @@ class ServerBase:
 
     - set PYTHON_MIN_VERSION and SUPPRESS_MESSAGE_REGEX as appropriate
     - implement the serve() coroutine, called from the run() method.
-      Upon return the event loop runs until the shutdown signal is received.
+      Returning from serve() or setting its event initiates shutdown.
     '''
     SUPPRESS_MESSAGE_REGEX = re.compile('SSL handshake|Fatal read error on|'
                                         'SSL error in data received|'
                                         'socket.send() raised exception')
     SUPPRESS_TASK_REGEX = re.compile('accept_connection2')
-    PYTHON_MIN_VERSION = (3, 6)
+    PYTHON_MIN_VERSION = (3, 12)
 
     def __init__(self, env):
         '''Save the environment, perform basic sanity checks, and set the
@@ -93,14 +91,8 @@ class ServerBase:
             shutdown_event.set()
             self.logger.warning(f'received {signame} signal, initiating shutdown')
 
-        async def serve():
-            try:
-                await self.serve(shutdown_event)
-            finally:
-                shutdown_event.set()
-
         self.start_time = time.time()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         shutdown_event = asyncio.Event()
 
         if platform.system() != 'Windows':
@@ -111,17 +103,16 @@ class ServerBase:
         loop.set_exception_handler(self.on_exception)
 
         # Start serving and wait for shutdown, log receipt of the event
-        server_task = await spawn(serve, report_crash=False)
+        server_task = asyncio.create_task(self.serve(shutdown_event))
+        server_task.add_done_callback(lambda _: shutdown_event.set())
         try:
             await shutdown_event.wait()
         except KeyboardInterrupt:
             self.logger.warning('received keyboard interrupt, initiating shutdown')
 
-        self.logger.info('shutting down')
-
-        server_task.cancel()
-        try:
+        finally:
+            self.logger.info('shutting down')
+            server_task.cancel()
             with suppress(asyncio.CancelledError):
                 await server_task
-        finally:
             self.logger.info('shutdown complete')

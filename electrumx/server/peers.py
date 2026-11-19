@@ -22,6 +22,7 @@ from aiorpcx import (connect_rs, RPCSession, SOCKSProxy, Notification, handler_i
                      sleep, ignore_after)
 
 from electrumx.lib.peer import Peer
+from electrumx.lib.taskgroup import cancel_and_join, task_group
 from electrumx.lib.util import class_logger
 
 PEER_GOOD, PEER_STALE, PEER_NEVER, PEER_BAD = range(4)
@@ -78,6 +79,8 @@ class PeerManager:
         self.permit_onion_peer_time = time.time()
         self.proxy = None
         self.group = TaskGroup()
+        self._accepting_monitors = True
+        self._monitor_group_claimed = False
         self.recent_peer_adds = {}
         # refreshed
         self.blacklist = set()
@@ -194,8 +197,25 @@ class PeerManager:
             self.logger.info('no proxy detected, will try later')
             await sleep(900)
 
+    def close_monitor_admission(self):
+        self._accepting_monitors = False
+
+    def _claim_monitor_group(self):
+        if self._monitor_group_claimed or self.group.joined:
+            return False
+        self._monitor_group_claimed = True
+        return True
+
+    async def shutdown(self):
+        self.close_monitor_admission()
+        # Admin RPC may have started monitors before discovery, or with discovery off.
+        if self._claim_monitor_group():
+            await cancel_and_join(self.group)
+
     async def _note_peers(self, peers, limit=2, check_ports=False, source=None):
         '''Add a limited number of peers that are not already present.'''
+        if not self._accepting_monitors:
+            return False
         new_peers = []
         match_set = self.peers.copy()
         for peer in peers:
@@ -224,7 +244,7 @@ class PeerManager:
                 self.logger.info(f'accepted new peer {peer} from {source}')
                 peer.retry_event = Event()
                 self.peers.add(peer)
-                await self.group.spawn(self._monitor_peer(peer))
+                await self.group.spawn(self._monitor_peer, peer)
 
         return True
 
@@ -366,7 +386,7 @@ class PeerManager:
         peer.server_version = server_version
         peer.features['server_version'] = server_version
 
-        async with TaskGroup() as g:
+        async with task_group() as g:
             await g.spawn(self._send_headers_subscribe(session))
             await g.spawn(self._send_server_features(session, peer))
             peers_task = await g.spawn(self._send_peers_subscribe
@@ -453,7 +473,9 @@ class PeerManager:
         self.logger.info(f'my clearnet self: {self._my_clearnet_peer()}')
         self.logger.info(f'force use of proxy: {self.env.force_proxy}')
         self.logger.info(f'beginning peer discovery...')
-        async with self.group as group:
+        if not self._accepting_monitors or not self._claim_monitor_group():
+            return
+        async with task_group(self.group, on_closing=self.close_monitor_admission) as group:
             await group.spawn(self._refresh_blacklist())
             await group.spawn(self._detect_proxy())
             await group.spawn(self._import_peers())
@@ -472,11 +494,11 @@ class PeerManager:
 
     async def add_localRPC_peer(self, real_name):
         '''Add a peer passed by the admin over LocalRPC.'''
-        await self._note_peers([Peer.from_real_name(real_name, 'RPC')])
+        return await self._note_peers([Peer.from_real_name(real_name, 'RPC')])
 
     async def on_add_peer(self, features, source_addr):
         '''Add a peer (but only if the peer resolves to the source).'''
-        if self.env.peer_discovery != self.env.PD_ON:
+        if self.env.peer_discovery != self.env.PD_ON or not self._accepting_monitors:
             return False
         if not source_addr:
             self.logger.info('ignored add_peer request: no source info')
@@ -506,7 +528,7 @@ class PeerManager:
             permit = self._permit_new_onion_peer(now)
             reason = 'rate limiting'
         else:
-            getaddrinfo = asyncio.get_event_loop().getaddrinfo
+            getaddrinfo = asyncio.get_running_loop().getaddrinfo
             try:
                 infos = await getaddrinfo(host, 80, type=socket.SOCK_STREAM)
             except socket.gaierror:
@@ -517,8 +539,9 @@ class PeerManager:
                 reason = 'source-destination mismatch'
 
         if permit:
+            if not await self._note_peers([peer], check_ports=True):
+                return False
             self.logger.info(f'accepted add_peer request from {source} for {host}')
-            await self._note_peers([peer], check_ports=True)
         else:
             self.logger.warning(f'rejected add_peer request from {source} '
                                 f'for {host} ({reason})')

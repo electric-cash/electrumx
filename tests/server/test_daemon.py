@@ -31,6 +31,7 @@ class ResponseBase(object):
 
     def __init__(self, headers, status):
         self.headers = headers
+        self.content_type = headers['Content-Type'].split(';')[0]
         self.status = status
 
     async def __aenter__(self):
@@ -43,7 +44,7 @@ class ResponseBase(object):
 class JSONResponse(ResponseBase):
 
     def __init__(self, result, msg_id, status=200):
-        super().__init__({'Content-Type': 'application/json'}, status)
+        super().__init__({'Content-Type': 'application/json; charset=utf-8'}, status)
         self.result = result
         self.msg_id = msg_id
 

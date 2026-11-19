@@ -1,9 +1,11 @@
 # Test of compaction code in server/history.py
 
 import array
-import asyncio
 from os import environ, urandom
 import random
+from unittest.mock import patch
+
+import pytest
 
 from electrumx.lib.hash import HASHX_LEN
 from electrumx.lib.util import pack_be_uint16, pack_le_uint64
@@ -110,12 +112,12 @@ def compact_history(history):
         write_size += history._compact_history(limit)
     assert write_size != 0
 
-async def run_test(db_dir):
-    environ.clear()
-    environ['DB_DIRECTORY'] = db_dir
-    environ['DAEMON_URL'] = ''
-    environ['COIN'] = 'ElectricCash'
-    db = DB(Env())
+@pytest.mark.asyncio
+async def test_compaction(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    config = {'DB_DIRECTORY': str(tmp_path), 'DAEMON_URL': '', 'COIN': 'ElectricCash'}
+    with patch.dict(environ, config, clear=True):
+        db = DB(Env())
     await db.open_for_serving()
     history = db.history
 
@@ -126,9 +128,3 @@ async def run_test(db_dir):
     check_written(history, histories)
     compact_history(history)
     check_written(history, histories)
-
-def test_compaction(tmpdir):
-    db_dir = str(tmpdir)
-    print('Temp dir: {}'.format(db_dir))
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(run_test(db_dir))
