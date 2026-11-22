@@ -2,33 +2,51 @@ name: "Docker Build & Test"
 
 on:
   pull_request:
-    types:
-      - opened
-      - synchronize
+
+permissions:
+  contents: read
+
+env:
+  RUNTIME_IMAGE: elcash-electrumx:testnet-local
+  UNIT_IMAGE: elcash-electrumx:testnet-unit
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
         with:
-          fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha }}
 
-      # In this step, this action saves a list of existing images,
-      # the cache is created without them in the post run.
-      # It also restores the cache if it exists.
-      - uses: satackey/action-docker-layer-caching@v0.0.11
-        # Ignore the failure of a step and avoid terminating the job.
-        continue-on-error: true
+      - name: Build installed ELCASH runtime
+        run: docker build -t "$RUNTIME_IMAGE" .
 
-      - name: Build docker image
-        run: docker build -t elcash-electrumx-ci .
+      - name: Reject startup without DAEMON_URL
+        timeout-minutes: 1
+        run: |
+          status=0
+          output=$(docker run --rm --pull=never --network none "$RUNTIME_IMAGE" 2>&1) || status=$?
+          printf 'Container exit: %s\n%s\n' "$status" "$output"
+          test "$status" -eq 1
+          grep -Fq 'required envvar DAEMON_URL' <<< "$output"
 
-      - name: pytest
-        run: docker run --rm -w /source -e LOCAL_USER_ID=`id -u` -v "$(PWD):/source" elcash-electrumx-ci pytest --cov=electrumx
+      - name: Installed wallet integration
+        timeout-minutes: 3
+        run: |
+          docker run --rm --pull=never --network none \
+            --mount "type=bind,source=${PWD}/tests/integration,target=/smoke,readonly" \
+            --entrypoint python3 "$RUNTIME_IMAGE" -B /smoke/test_runtime_wallet.py
 
-      - name: pycodestyle
-        run: docker run --rm -w /source -e LOCAL_USER_ID=`id -u` -v "$(PWD):/source" elcash-electrumx-ci flake8 --exit-zero --max-line-length 100 --filename "./electrumx/**/*.py,./electrumx/*.py"
+      - name: Build unit test layer
+        run: docker build -f docker/unit.Dockerfile --build-arg RUNTIME_IMAGE="$RUNTIME_IMAGE" -t "$UNIT_IMAGE" .
+
+      - name: Unit tests and coverage
+        run: docker run --rm --pull=never --network none --ulimit nofile=65536:65536 "$UNIT_IMAGE"
+
+      - name: Informational flake8
+        run: |
+          docker run --rm --pull=never --network none \
+            --mount "type=bind,source=${PWD}/electrumx,target=/lint,readonly" \
+            "$UNIT_IMAGE" flake8 --exit-zero -q --statistics --max-line-length 100 /lint

@@ -16,7 +16,7 @@ import json
 import sys
 from os import environ
 
-from aiorpcx import timeout_after, connect_rs
+from aiorpcx import NewlineFramer, timeout_after, connect_rs
 import electrumx.lib.text as text
 
 
@@ -87,7 +87,7 @@ def main():
                              help='RPC port number')
 
     subparsers = main_parser.add_subparsers(help='sub-command help',
-                                            dest='command')
+                                            dest='command', required=True)
 
     for command, help in simple_commands.items():
         parser = subparsers.add_parser(command, help=help)
@@ -115,8 +115,7 @@ def main():
     async def send_request():
         try:
             async with timeout_after(30):
-                async with connect_rs('localhost', port) as session:
-                    session.transport._framer.max_size = 0
+                async with connect_rs('localhost', port, framer=NewlineFramer(max_size=0)) as session:
                     result = await session.send_request(method, args)
                     if method in ('query', ):
                         for line in result:
@@ -136,10 +135,8 @@ def main():
             print(f'error making request: {e}')
             return 1
 
-    loop = asyncio.get_event_loop()
-    code = loop.run_until_complete(send_request())
-    sys.exit(code)
+    return asyncio.run(send_request())
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

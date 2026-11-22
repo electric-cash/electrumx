@@ -4,9 +4,6 @@ from unittest import mock
 from aiorpcx import RPCError
 from electrumx import Controller, Env
 
-loop = asyncio.get_event_loop()
-
-
 def set_env():
     env = mock.create_autospec(Env)
     env.coin = mock.Mock()
@@ -31,10 +28,10 @@ def raise_exception(msg):
     raise RPCError(1, msg)
 
 
-def ensure_text_exception(test, exception):
+async def ensure_text_exception(test, exception):
     res = err = None
     try:
-        res = loop.run_until_complete(test)
+        res = await test
     except Exception as e:
         err = e
     assert isinstance(err, exception), (res, err)
@@ -43,7 +40,7 @@ def ensure_text_exception(test, exception):
 def test_dummy():
     assert True
 
-def _test_transaction_get():
+async def _test_transaction_get():
     async def test_verbose_ignore_by_backend():
         env = set_env()
         sut = Controller(env)
@@ -96,13 +93,13 @@ def _test_transaction_get():
         await sut.transaction_get('cafe')
         sut.daemon_request.assert_not_called()
 
-    loop.run_until_complete(asyncio.gather(
+    await asyncio.gather(
         *[
             test_verbose_ignore_by_backend(),
             test_verbose_ok(),
             test_no_verbose()
         ]
-    ))
+    )
 
     for error_test in [test_verbose_failure, test_wrong_txhash]:
-        ensure_text_exception(error_test(), RPCError)
+        await ensure_text_exception(error_test(), RPCError)

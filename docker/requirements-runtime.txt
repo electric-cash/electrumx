@@ -1,0 +1,17 @@
+# ELCASH LevelDB image, CPython 3.12 / Linux amd64.
+aiohttp==3.14.5
+aiorpcX[ws]==0.25.0
+attrs==26.1.0
+plyvel==1.5.1
+pylru==1.3.3
+websockets==17.4
+
+# Transitive dependencies pinned to keep qualified images reproducible.
+aiohappyeyeballs==2.7.1
+aiosignal==1.4.0
+frozenlist==1.8.0
+idna==3.20
+multidict==7.2.1
+propcache==0.5.4
+typing_extensions==4.16.0
+yarl==1.25.1
