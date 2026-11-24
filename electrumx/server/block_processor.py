@@ -25,6 +25,10 @@ from electrumx.lib.util import (
 from electrumx.server.db import FlushData
 
 
+_CACHE_CHECK_BLOCKS = 1024
+_MB = 1_000_000
+
+
 class Prefetcher(object):
     '''Prefetches blocks (in the forward direction only).'''
 
@@ -177,6 +181,8 @@ class BlockProcessor(object):
 
         # Caches of unflushed items.
         self.headers = []
+        self.pending_header_bytes = 0
+        self._headers_at_cache_check = 0
         self.tx_hashes = []
         self.undo_infos = []
 
@@ -349,8 +355,14 @@ class BlockProcessor(object):
 
     async def flush(self, flush_utxos):
         def flush():
-            self.db.flush_dbs(self.flush_data(), flush_utxos,
-                              self.estimate_txs_remaining)
+            try:
+                self.db.flush_dbs(self.flush_data(), flush_utxos,
+                                  self.estimate_txs_remaining)
+            finally:
+                # flush_fs clears the shared list before history and UTXO writes.
+                if not self.headers:
+                    self.pending_header_bytes = 0
+                    self._headers_at_cache_check = 0
         await self.run_in_thread_with_lock(flush)
 
     async def _maybe_flush(self):
@@ -358,25 +370,30 @@ class BlockProcessor(object):
         # performed on the DB.
         if self._caught_up_event.is_set():
             await self.flush(True)
-        elif time.time() > self.next_cache_check:
+        else:
+            timed = time.time() > self.next_cache_check
+            if not (timed or len(self.headers) - self._headers_at_cache_check >= _CACHE_CHECK_BLOCKS
+                    or self.pending_header_bytes >= max(1, self.env.cache_MB // 5) * _MB):
+                return
             flush_arg = self.check_cache_size()
             if flush_arg is not None:
                 await self.flush(flush_arg)
-            self.next_cache_check = time.time() + 30
+            self._headers_at_cache_check = len(self.headers)
+            if timed:
+                self.next_cache_check = time.time() + 30
 
     def check_cache_size(self):
         '''Flush a cache if it gets too big.'''
         # Good average estimates based on traversal of subobjects and
         # requesting size from Python (see deep_getsizeof).
-        one_MB = 1000*1000
         utxo_cache_size = len(self.utxo_cache) * 205
         db_deletes_size = len(self.db_deletes) * 57
         hist_cache_size = self.db.history.unflushed_memsize()
         # Roughly ntxs * 32 + nblocks * 42
         tx_hash_size = ((self.tx_count - self.db.fs_tx_count) * 32
                         + (self.height - self.db.fs_height) * 42)
-        utxo_MB = (db_deletes_size + utxo_cache_size) // one_MB
-        hist_MB = (hist_cache_size + tx_hash_size) // one_MB
+        utxo_MB = (db_deletes_size + utxo_cache_size) // _MB
+        hist_MB = (hist_cache_size + tx_hash_size + self.pending_header_bytes) // _MB
 
         self.logger.info('our height: {:,d} daemon: {:,d} '
                          'UTXOs {:,d}MB hist {:,d}MB'
@@ -411,6 +428,7 @@ class BlockProcessor(object):
         headers = [block.header for block in blocks]
         self.height = height
         self.headers.extend(headers)
+        self.pending_header_bytes += sum(map(len, headers))
         self.tip = self.coin.header_hash(headers[-1])
 
     def advance_txs(self, txs, is_unspendable):
