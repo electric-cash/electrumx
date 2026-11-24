@@ -1,54 +1,48 @@
-FROM python:3.7-alpine3.11
+FROM python:3.12-slim-trixie@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b AS base
+RUN apt-get -o APT::Update::Error-Mode=any update \
+    && apt-get install -y --no-install-recommends --only-upgrade libc-bin libc6 zlib1g \
+    && for pkg in libc-bin libc6; do \
+        dpkg --compare-versions "$(dpkg-query -W -f='${Version}' "$pkg")" ge '2.41-12+deb13u5' || exit 1; \
+    done \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' zlib1g)" ge '1:1.3.dfsg+really1.3.1-1+deb13u1' \
+    && rm -rf /var/lib/apt/lists/*
+RUN python -m pip install --no-cache-dir --only-binary=:all: pip==26.3
 
+FROM base AS builder
+WORKDIR /build
+COPY setup.py setup.cfg LICENCE electrumx_server electrumx_rpc electrumx_compact_history ./
+COPY electrumx ./electrumx
+RUN python -m pip wheel --no-cache-dir --no-deps --wheel-dir /wheels .
+
+FROM base
+# The ELCASH deployment uses LevelDB. Its Linux wheel includes the native library.
+COPY docker/requirements-runtime.txt /tmp/requirements-runtime.txt
 WORKDIR /source
-
-RUN apk add --no-cache \
-        git \
-        build-base \
-        openssl \
-        libressl-dev \
-        libffi-dev \
-        gcc && \
-    apk add --no-cache --repository http://dl-cdn.alpinelinux.org/alpine/v3.11/main leveldb-dev && \
-    apk add --no-cache --repository http://dl-cdn.alpinelinux.org/alpine/edge/testing rocksdb-dev && \
-    pip install \
-        aiohttp \
-        pylru \
-        plyvel \
-        websockets \
-        leveldb \
-        python-rocksdb \
-        pytest-asyncio \
-        pytest-cov \
-        pycodestyle \
-        coveralls \
-        flake8 \
-    && mkdir /db
-
-RUN ulimit -n 1048576
+RUN --mount=type=bind,from=builder,source=/wheels,target=/wheels \
+    python -m pip install --no-cache-dir --only-binary=:all: -r /tmp/requirements-runtime.txt /wheels/*.whl \
+    && python -m pip check \
+    && python -c "import plyvel" \
+    && ln -s /usr/local/bin/electrumx_rpc /source/electrumx_rpc \
+    && ln -s /usr/local/bin/electrumx_server /source/electrumx_server \
+    && ln -s /usr/local/bin/electrumx_compact_history /source/electrumx_compact_history \
+    && mkdir -p /db
 
 VOLUME /db
-
-ENV ALLOW_ROOT 1
-ENV DB_DIRECTORY /db
-ENV DAEMON_URL "http://username:password@hostname:port/"
-ENV COIN ElectricCash
-ENV NET mainnet
-ENV DB_ENGINE leveldb
-ENV HOST ""
-ENV SSL_CERTFILE ""
-ENV SSL_KEYFILE ""
-ENV SERVICES "ssl://:50002,tcp://:50001"
-ENV COST_HARD_LIMIT 500000
-ENV COST_LIMIT_SOFT 100000
-ENV INITIAL_CONCURRENT 500
-ENV BANDWIDTH_UNIT_COST 100000
-ENV MAX_SEND 10000000
-ENV CACHE_MB 2000
-ENV MAX_SESSIONS 999999
-
-COPY . .
-
-RUN python3 setup.py install
+ENV ALLOW_ROOT=1 \
+    DB_DIRECTORY=/db \
+    COIN=ElectricCash \
+    NET=mainnet \
+    DB_ENGINE=leveldb \
+    HOST="" \
+    SSL_CERTFILE="" \
+    SSL_KEYFILE="" \
+    SERVICES="ssl://:50002,tcp://:50001" \
+    COST_HARD_LIMIT=500000 \
+    COST_LIMIT_SOFT=100000 \
+    INITIAL_CONCURRENT=500 \
+    BANDWIDTH_UNIT_COST=100000 \
+    MAX_SEND=10000000 \
+    CACHE_MB=2000 \
+    MAX_SESSIONS=999999
 
 CMD ["/usr/local/bin/electrumx_server"]

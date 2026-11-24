@@ -6,11 +6,13 @@ ElectrumX - Reimplementation of electrum-server
 For a future network with bigger blocks.
 
   :Licence: MIT
-  :Language: Python (>= 3.7)
+  :Language: Python (>= 3.12)
   :Author: Neil Booth
 
 Documentation
 =============
+
+See [ELCASH runtime and local checks](docs/runtime.md).
 
 See `readthedocs <https://electrumx.readthedocs.io/>`_.
 

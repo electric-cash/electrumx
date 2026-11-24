@@ -33,6 +33,27 @@ from electrumx.server.history import History
 
 
 UTXO = namedtuple("UTXO", "tx_num tx_pos tx_hash height value")
+_FS_WRITE_BATCH_SIZE = 1024 * 1024
+
+
+def _write_chunks(file, offset, chunks):
+    '''Coalesce small records; pass views so physical file splits do not copy tails.'''
+    batch = bytearray()
+    for chunk in chunks:
+        if batch and len(batch) + len(chunk) > _FS_WRITE_BATCH_SIZE:
+            file.write(offset, memoryview(batch))
+            offset += len(batch)
+            batch = bytearray()
+        if len(chunk) >= _FS_WRITE_BATCH_SIZE:
+            view = memoryview(chunk)
+            for pos in range(0, len(view), _FS_WRITE_BATCH_SIZE):
+                part = view[pos:pos + _FS_WRITE_BATCH_SIZE]
+                file.write(offset, part)
+                offset += len(part)
+        else:
+            batch.extend(chunk)
+    if batch:
+        file.write(offset, memoryview(batch))
 
 
 @attr.s(slots=True)
@@ -252,25 +273,24 @@ class DB(object):
         assert flush_data.tx_count == (self.tx_counts[-1] if self.tx_counts
                                        else 0)
         assert len(self.tx_counts) == flush_data.height + 1
-        hashes = b''.join(flush_data.block_tx_hashes)
-        flush_data.block_tx_hashes.clear()
-        assert len(hashes) % 32 == 0
-        assert len(hashes) // 32 == flush_data.tx_count - prior_tx_count
+        hash_bytes = sum(map(len, flush_data.block_tx_hashes))
+        assert hash_bytes == 32 * (flush_data.tx_count - prior_tx_count)
 
         # Write the headers, tx counts, and tx hashes
         start_time = time.time()
         height_start = self.fs_height + 1
         offset = self.header_offset(height_start)
-        self.headers_file.write(offset, b''.join(flush_data.headers))
+        _write_chunks(self.headers_file, offset, flush_data.headers)
         self.fs_update_header_offsets(offset, height_start, flush_data.headers)
-        flush_data.headers.clear()
 
         offset = height_start * self.tx_counts.itemsize
         self.tx_counts_file.write(offset,
                                   self.tx_counts[height_start:].tobytes())
         offset = prior_tx_count * 32
-        self.hashes_file.write(offset, hashes)
+        _write_chunks(self.hashes_file, offset, flush_data.block_tx_hashes)
 
+        flush_data.headers.clear()
+        flush_data.block_tx_hashes.clear()
         self.fs_height = flush_data.height
         self.fs_tx_count = flush_data.tx_count
 
@@ -357,15 +377,17 @@ class DB(object):
     def fs_update_header_offsets(self, offset_start, height_start, headers):
         if self.coin.STATIC_BLOCK_HEADERS:
             return
-        offset = offset_start
-        offsets = []
-        for h in headers:
-            offset += len(h)
-            offsets.append(pack_le_uint64(offset))
+
+        def offsets():
+            offset = offset_start
+            for header in headers:
+                offset += len(header)
+                yield pack_le_uint64(offset)
+
         # For each header we get the offset of the next header, hence we
         # start writing from the next height
         pos = (height_start + 1) * 8
-        self.headers_offsets_file.write(pos, b''.join(offsets))
+        _write_chunks(self.headers_offsets_file, pos, offsets())
 
     def dynamic_header_offset(self, height):
         assert not self.coin.STATIC_BLOCK_HEADERS

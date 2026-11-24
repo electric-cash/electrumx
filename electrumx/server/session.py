@@ -7,6 +7,7 @@
 
 '''Classes for local RPC server and remote client TCP/SSL servers.'''
 
+import asyncio
 import codecs
 import datetime
 import itertools
@@ -23,12 +24,15 @@ from ipaddress import IPv4Address, IPv6Address
 import attr
 from aiorpcx import (
     RPCSession, JSONRPCAutoDetect, JSONRPCConnection, serve_rs, serve_ws,
-    TaskGroup, handler_invocation, RPCError, Request, sleep, Event, ReplyAndDisconnect
+    TaskGroup, handler_invocation, RPCError, Request, sleep, Event, ReplyAndDisconnect,
+    TaskTimeout,
 )
 import pylru
+from websockets.exceptions import ConnectionClosed
 
 import electrumx
 from electrumx.lib.merkle import MerkleCache
+from electrumx.lib.taskgroup import task_group
 from electrumx.lib.text import sessions_lines
 import electrumx.lib.util as util
 from electrumx.lib.hash import (sha256, hash_to_hex_str, hex_str_to_hash,
@@ -111,6 +115,9 @@ class SessionReferences:
 class SessionManager:
     '''Holds global state about all sessions.'''
 
+    # Pending TLS handshakes have no registered session to close during shutdown.
+    SSL_HANDSHAKE_TIMEOUT = 10
+
     def __init__(self, env, db, bp, daemon, mempool, shutdown_event):
         env.max_send = max(350000, env.max_send)
         self.env = env
@@ -122,6 +129,8 @@ class SessionManager:
         self.shutdown_event = shutdown_event
         self.logger = util.class_logger(__name__, self.__class__.__name__)
         self.servers = {}           # service->server
+        self._paused_listeners = set()
+        self._shutdown_closers = None
         self.sessions = {}          # session->iterable of its SessionGroups
         self.session_groups = {}    # group name->SessionGroup instance
         self.txs_sent = 0
@@ -154,9 +163,8 @@ class SessionManager:
 
     def _ssl_context(self):
         if self._sslc is None:
-            self._sslc = ssl.SSLContext(ssl.PROTOCOL_TLS)
-            self._sslc.options |= ssl.OP_NO_TLSv1
-            self._sslc.options |= ssl.OP_NO_TLSv1_1
+            self._sslc = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            self._sslc.minimum_version = ssl.TLSVersion.TLSv1_2
             self._sslc.load_cert_chain(self.env.ssl_certfile, keyfile=self.env.ssl_keyfile)
         return self._sslc
 
@@ -179,9 +187,10 @@ class SessionManager:
             session_factory = partial(session_class, self, self.db, self.mempool,
                                       self.peer_mgr, kind)
             host = None if service.host == 'all_interfaces' else str(service.host)
+            options = {'ssl_handshake_timeout': self.SSL_HANDSHAKE_TIMEOUT} if sslc else {}
             try:
                 self.servers[service] = await serve(session_factory, host,
-                                                    service.port, ssl=sslc)
+                                                    service.port, ssl=sslc, **options)
             except OSError as e:    # don't suppress CancelledError
                 self.logger.error(f'{kind} server failed to listen on {service.address}: {e}')
             else:
@@ -195,17 +204,22 @@ class SessionManager:
                                   if service.protocol != 'rpc')
         self.server_listening.set()
 
-    async def _stop_servers(self, services):
-        '''Stop the servers of the given protocols.'''
+    def _close_listeners(self, services, *, pause=False):
+        '''Stop accepting connections without waiting for existing clients.'''
         server_map = {service: self.servers.pop(service)
                       for service in set(services).intersection(self.servers)}
         # Close all before waiting
         for service, server in server_map.items():
             self.logger.info(f'closing down server for {service}')
-            server.close()
-        # No value in doing these concurrently
-        for server in server_map.values():
-            await server.wait_closed()
+            if pause and service.protocol in ('ws', 'wss'):
+                server.close(close_connections=False)
+            else:
+                server.close()
+        return server_map.values()
+
+    async def _retire_paused_listener(self, server):
+        await server.wait_closed()
+        self._paused_listeners.discard(server)
 
     async def _manage_servers(self):
         paused = False
@@ -218,8 +232,11 @@ class SessionManager:
                 self.logger.info(f'maximum sessions {max_sessions:,d} '
                                  f'reached, stopping new connections until '
                                  f'count drops to {low_watermark:,d}')
-                await self._stop_servers(service for service in self.servers
-                                         if service.protocol != 'rpc')
+                servers = self._close_listeners((service for service in self.servers
+                                                 if service.protocol != 'rpc'), pause=True)
+                self._paused_listeners.update(servers)
+                for server in servers:
+                    await self._task_group.spawn(self._retire_paused_listener, server)
                 paused = True
             # Start listening for incoming connections if paused and
             # session count has fallen
@@ -413,7 +430,8 @@ class SessionManager:
 
         real_name: "bch.electrumx.cash t50001 s50002" for example
         '''
-        await self.peer_mgr.add_localRPC_peer(real_name)
+        if not await self.peer_mgr.add_localRPC_peer(real_name):
+            return "peer '{}' not added: peer discovery is stopping".format(real_name)
         return "peer '{}' added".format(real_name)
 
     async def rpc_disconnect(self, session_ids):
@@ -615,7 +633,8 @@ class SessionManager:
             await self._start_external_servers()
             # Peer discovery should start after the external servers
             # because we connect to ourself
-            async with self._task_group as group:
+            async with task_group(self._task_group,
+                                  on_closing=self.peer_mgr.close_monitor_admission) as group:
                 await group.spawn(self.peer_mgr.discover_peers())
                 await group.spawn(self._clear_stale_sessions())
                 await group.spawn(self._handle_chain_reorgs())
@@ -623,11 +642,22 @@ class SessionManager:
                 await group.spawn(self._log_sessions())
                 await group.spawn(self._manage_servers())
         finally:
-            # Close servers then sessions
-            await self._stop_servers(self.servers.keys())
-            async with TaskGroup() as group:
-                for session in list(self.sessions):
-                    await group.spawn(session.close(force_after=1))
+            try:
+                await self.peer_mgr.shutdown()
+            finally:
+                await self._drain_on_shutdown()
+
+    async def _drain_on_shutdown(self):
+        async with asyncio.TaskGroup() as closers:
+            self._shutdown_closers = closers
+            try:
+                servers = self._paused_listeners.union(self._close_listeners(self.servers))
+                for session in self.sessions:
+                    closers.create_task(session.close(force_after=1))
+                for server in servers:
+                    await server.wait_closed()
+            finally:
+                self._shutdown_closers = None
 
     def extra_cost(self, session):
         # Note there is no guarantee that session is still in self.sessions.  Example traceback:
@@ -798,6 +828,9 @@ class SessionManager:
         self.sessions[session] = groups
         for group in groups:
             group.sessions.add(session)
+        # A connection accepted before close() may register while wait_closed() runs.
+        if self._shutdown_closers is not None:
+            self._shutdown_closers.create_task(session.close(force_after=1))
 
     def remove_session(self, session):
         '''Remove a session from our sessions list if there.'''
@@ -959,13 +992,23 @@ class ElectrumX(SessionBase):
         self.mempool_statuses.pop(hashX, None)
         return self.hashX_subs.pop(hashX, None)
 
+    async def _send_subscription(self, method, args):
+        try:
+            await self.send_notification(method, args)
+        except (ConnectionClosed, TaskTimeout):
+            # Transport failures belong to this client, not the shared notification group.
+            self.logger.debug('client disconnected or timed out during notification')
+            return False
+        return True
+
     async def notify(self, touched, height_changed):
         '''Notify the client about changes to touched addresses (from mempool
         updates or new blocks) and height.
         '''
         if height_changed and self.subscribe_headers:
             args = (await self.subscribe_headers_result(), )
-            await self.send_notification('blockchain.headers.subscribe', args)
+            if not await self._send_subscription('blockchain.headers.subscribe', args):
+                return
 
         touched = touched.intersection(self.hashX_subs)
         if touched or (height_changed and self.mempool_statuses):
@@ -989,7 +1032,8 @@ class ElectrumX(SessionBase):
 
             method = 'blockchain.scripthash.subscribe'
             for alias, status in changed.items():
-                await self.send_notification(method, (alias, status))
+                if not await self._send_subscription(method, (alias, status)):
+                    return
 
             if changed:
                 es = '' if len(changed) == 1 else 'es'

@@ -12,9 +12,10 @@
 import asyncio
 import time
 
-from aiorpcx import TaskGroup, run_in_thread, CancelledError
+from aiorpcx import run_in_thread
 
 import electrumx
+from electrumx.lib.taskgroup import task_group
 from electrumx.server.daemon import DaemonError
 from electrumx.lib.hash import hash_to_hex_str, HASHX_LEN
 from electrumx.lib.script import is_unspendable_legacy, is_unspendable_genesis
@@ -22,6 +23,10 @@ from electrumx.lib.util import (
     chunks, class_logger, pack_le_uint32, pack_le_uint64, unpack_le_uint64
 )
 from electrumx.server.db import FlushData
+
+
+_CACHE_CHECK_BLOCKS = 1024
+_MB = 1_000_000
 
 
 class Prefetcher(object):
@@ -176,6 +181,8 @@ class BlockProcessor(object):
 
         # Caches of unflushed items.
         self.headers = []
+        self.pending_header_bytes = 0
+        self._headers_at_cache_check = 0
         self.tx_hashes = []
         self.undo_infos = []
 
@@ -191,15 +198,20 @@ class BlockProcessor(object):
         self.backed_up_event = asyncio.Event()
 
     async def run_in_thread_with_lock(self, func, *args):
-        # Run in a thread to prevent blocking.  Shielded so that
-        # cancellations from shutdown don't lose work - when the task
-        # completes the data will be flushed and then we shut down.
-        # Take the state lock to be certain in-memory state is
-        # consistent and not being updated elsewhere.
-        async def run_in_thread_locked():
-            async with self.state_lock:
-                return await run_in_thread(func, *args)
-        return await asyncio.shield(run_in_thread_locked())
+        async with self.state_lock:
+            # Cancelling the waiter cannot stop an executor thread. Hold the
+            # lock and observe its result before deciding whether it is safe to flush.
+            writer = asyncio.create_task(run_in_thread(func, *args))
+            cancelled = None
+            while not writer.done():
+                try:
+                    await asyncio.shield(writer)
+                except asyncio.CancelledError as exc:
+                    cancelled = exc
+            result = writer.result()
+            if cancelled is not None:
+                raise cancelled
+            return result
 
     async def check_and_advance_blocks(self, raw_blocks):
         '''Process the list of raw blocks passed.  Detects and handles
@@ -258,7 +270,8 @@ class BlockProcessor(object):
             except FileNotFoundError:
                 return await self.daemon.raw_blocks(hex_hashes)
 
-        def flush_backup():
+        def backup_and_flush(raw_blocks):
+            self.backup_blocks(raw_blocks)
             # self.touched can include other addresses which is
             # harmless, but remove None.
             self.touched.discard(None)
@@ -269,8 +282,7 @@ class BlockProcessor(object):
         hashes = [hash_to_hex_str(hash) for hash in reversed(hashes)]
         for hex_hashes in chunks(hashes, 50):
             raw_blocks = await get_raw_blocks(last, hex_hashes)
-            await self.run_in_thread_with_lock(self.backup_blocks, raw_blocks)
-            await self.run_in_thread_with_lock(flush_backup)
+            await self.run_in_thread_with_lock(backup_and_flush, raw_blocks)
             last -= len(raw_blocks)
         await self.prefetcher.reset_height(self.height)
         self.backed_up_event.set()
@@ -343,8 +355,14 @@ class BlockProcessor(object):
 
     async def flush(self, flush_utxos):
         def flush():
-            self.db.flush_dbs(self.flush_data(), flush_utxos,
-                              self.estimate_txs_remaining)
+            try:
+                self.db.flush_dbs(self.flush_data(), flush_utxos,
+                                  self.estimate_txs_remaining)
+            finally:
+                # flush_fs clears the shared list before history and UTXO writes.
+                if not self.headers:
+                    self.pending_header_bytes = 0
+                    self._headers_at_cache_check = 0
         await self.run_in_thread_with_lock(flush)
 
     async def _maybe_flush(self):
@@ -352,25 +370,30 @@ class BlockProcessor(object):
         # performed on the DB.
         if self._caught_up_event.is_set():
             await self.flush(True)
-        elif time.time() > self.next_cache_check:
+        else:
+            timed = time.time() > self.next_cache_check
+            if not (timed or len(self.headers) - self._headers_at_cache_check >= _CACHE_CHECK_BLOCKS
+                    or self.pending_header_bytes >= max(1, self.env.cache_MB // 5) * _MB):
+                return
             flush_arg = self.check_cache_size()
             if flush_arg is not None:
                 await self.flush(flush_arg)
-            self.next_cache_check = time.time() + 30
+            self._headers_at_cache_check = len(self.headers)
+            if timed:
+                self.next_cache_check = time.time() + 30
 
     def check_cache_size(self):
         '''Flush a cache if it gets too big.'''
         # Good average estimates based on traversal of subobjects and
         # requesting size from Python (see deep_getsizeof).
-        one_MB = 1000*1000
         utxo_cache_size = len(self.utxo_cache) * 205
         db_deletes_size = len(self.db_deletes) * 57
         hist_cache_size = self.db.history.unflushed_memsize()
         # Roughly ntxs * 32 + nblocks * 42
         tx_hash_size = ((self.tx_count - self.db.fs_tx_count) * 32
                         + (self.height - self.db.fs_height) * 42)
-        utxo_MB = (db_deletes_size + utxo_cache_size) // one_MB
-        hist_MB = (hist_cache_size + tx_hash_size) // one_MB
+        utxo_MB = (db_deletes_size + utxo_cache_size) // _MB
+        hist_MB = (hist_cache_size + tx_hash_size + self.pending_header_bytes) // _MB
 
         self.logger.info('our height: {:,d} daemon: {:,d} '
                          'UTXOs {:,d}MB hist {:,d}MB'
@@ -405,6 +428,7 @@ class BlockProcessor(object):
         headers = [block.header for block in blocks]
         self.height = height
         self.headers.extend(headers)
+        self.pending_header_bytes += sum(map(len, headers))
         self.tip = self.coin.header_hash(headers[-1])
 
     def advance_txs(self, txs, is_unspendable):
@@ -677,13 +701,16 @@ class BlockProcessor(object):
         self._caught_up_event = caught_up_event
         await self._first_open_dbs()
         try:
-            async with TaskGroup() as group:
+            async with task_group() as group:
                 await group.spawn(self.prefetcher.main_loop(self.height))
                 await group.spawn(self._process_prefetched_blocks())
         # Don't flush for arbitrary exceptions as they might be a cause or consequence of
         # corrupted data
-        except CancelledError:
+        except asyncio.CancelledError:
             self.logger.info('flushing to DB for a clean shutdown...')
+            await self.flush(True)
+            raise
+        else:
             await self.flush(True)
 
     def force_chain_reorg(self, count):
